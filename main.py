@@ -1,5 +1,6 @@
 import os
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -140,7 +141,10 @@ def eliminar_servicio(servicio_id: int):
 @app.get("/api/horas-disponibles-cliente")
 def obtener_horas_cliente(fecha: str):
     try:
-        # 1. Obtener las horas configuradas activas
+        # Zona horaria de Chile
+        zona_chile = ZoneInfo("America/Santiago")
+        
+        # 1. Obtener las horas configuradas activas desde Supabase
         horarios_res = supabase.table("horarios").select("hora").eq("activo", True).execute()
         
         if not horarios_res.data:
@@ -148,7 +152,7 @@ def obtener_horas_cliente(fecha: str):
 
         horas_configuradas = [h["hora"] for h in horarios_res.data]
 
-        # 2. Buscar horas ocupadas en la fecha seleccionada
+        # 2. Buscar horas ocupadas o bloqueadas para la fecha consultada
         fecha_inicio = f"{fecha}T00:00:00Z"
         fecha_fin = f"{fecha}T23:59:59Z"
         
@@ -163,27 +167,29 @@ def obtener_horas_cliente(fecha: str):
             for registro in citas_res.data:
                 try:
                     dt = datetime.fromisoformat(registro["fecha_hora"].replace("Z", "+00:00"))
-                    horas_ocupadas.append(dt.strftime("%H:%M"))
+                    # Convertir a hora de Chile para comparar consistentemente
+                    dt_chile = dt.astimezone(zona_chile)
+                    horas_ocupadas.append(dt_chile.strftime("%H:%M"))
                 except Exception:
                     pass
 
-        # 3. Filtrar las horas libres
+        # 3. Filtrar horas no ocupadas
         horas_libres = [hora for hora in horas_configuradas if hora not in horas_ocupadas]
         
-        # 4. Si la fecha consultada es el día de HOY, ignorar las horas pasadas
-        fecha_actual_local = datetime.now()
-        fecha_consulta = datetime.strptime(fecha, "%Y-%m-%d")
+        # 4. ⏰ FILTRO DE HORAS PASADAS (usando hora local de Chile)
+        ahora_chile = datetime.now(zona_chile)
+        fecha_consulta = datetime.strptime(fecha, "%Y-%m-%d").date()
         
-        if fecha_consulta.date() == fecha_actual_local.date():
-            hora_actual_str = fecha_actual_local.strftime("%H:%M")
+        # Si la fecha que consulta el cliente es el día de HOY
+        if fecha_consulta == ahora_chile.date():
+            hora_actual_str = ahora_chile.strftime("%H:%M")
+            # Dejar estrictamente solo las horas FUTURAS
             horas_libres = [hora for hora in horas_libres if hora > hora_actual_str]
         
-        # Garantizamos devolver siempre una lista ordenada
         return sorted(horas_libres) if horas_libres else []
         
     except Exception as e:
         print(f"Error en horas cliente: {e}")
-        # En caso de cualquier excepción devolvemos lista vacía en lugar de romper el JSON
         return []
 
 @app.post("/api/reservar", status_code=status.HTTP_201_CREATED)
