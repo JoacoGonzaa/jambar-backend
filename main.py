@@ -140,11 +140,15 @@ def eliminar_servicio(servicio_id: int):
 @app.get("/api/horas-disponibles-cliente")
 def obtener_horas_cliente(fecha: str):
     try:
-        # 1. Obtener las horas dinámicas activas desde Supabase
+        # 1. Obtener las horas configuradas activas
         horarios_res = supabase.table("horarios").select("hora").eq("activo", True).execute()
+        
+        if not horarios_res.data:
+            return []
+
         horas_configuradas = [h["hora"] for h in horarios_res.data]
 
-        # 2. Buscar qué horas ya están ocupadas o bloqueadas
+        # 2. Buscar horas ocupadas en la fecha seleccionada
         fecha_inicio = f"{fecha}T00:00:00Z"
         fecha_fin = f"{fecha}T23:59:59Z"
         
@@ -155,14 +159,18 @@ def obtener_horas_cliente(fecha: str):
             .execute()
         
         horas_ocupadas = []
-        for registro in citas_res.data:
-            dt = datetime.fromisoformat(registro["fecha_hora"].replace("Z", "+00:00"))
-            horas_ocupadas.append(dt.strftime("%H:%M"))
+        if citas_res.data:
+            for registro in citas_res.data:
+                try:
+                    dt = datetime.fromisoformat(registro["fecha_hora"].replace("Z", "+00:00"))
+                    horas_ocupadas.append(dt.strftime("%H:%M"))
+                except Exception:
+                    pass
 
-        # 3. Filtrar de las horas configuradas las que no estén ocupadas
+        # 3. Filtrar las horas libres
         horas_libres = [hora for hora in horas_configuradas if hora not in horas_ocupadas]
         
-        # 4. Eliminar horas pasadas si el cliente consulta el día de HOY
+        # 4. Si la fecha consultada es el día de HOY, ignorar las horas pasadas
         fecha_actual_local = datetime.now()
         fecha_consulta = datetime.strptime(fecha, "%Y-%m-%d")
         
@@ -170,10 +178,13 @@ def obtener_horas_cliente(fecha: str):
             hora_actual_str = fecha_actual_local.strftime("%H:%M")
             horas_libres = [hora for hora in horas_libres if hora > hora_actual_str]
         
-        return sorted(horas_libres)
+        # Garantizamos devolver siempre una lista ordenada
+        return sorted(horas_libres) if horas_libres else []
+        
     except Exception as e:
         print(f"Error en horas cliente: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # En caso de cualquier excepción devolvemos lista vacía en lugar de romper el JSON
+        return []
 
 @app.post("/api/reservar", status_code=status.HTTP_201_CREATED)
 def reservar_cita(cita: Cita):
